@@ -38,3 +38,10 @@ class IncidentRecord(BaseModel):
     timestamp_detected: str
     timestamp_resolved: Optional[str] = None
     action_taken: Optional[str] = None
+
+class PropagationPayload(BaseModel):
+    from_node: str
+    to_node: Optional[str] = None
+    file_id: str
+    status: str
+    delay: float

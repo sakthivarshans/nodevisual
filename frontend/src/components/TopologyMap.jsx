@@ -21,8 +21,10 @@ function nodeColors(status, role) {
   return { fill: '#EFF6FF', stroke: '#3B82F6', text: '#1D4ED8' };
 }
 
-export default function TopologyMap({ nodes, elections, traffic }) {
+export default function TopologyMap({ nodes, elections, traffic, events }) {
   const [arrows, setArrows] = useState([]);
+  const [particles, setParticles] = useState([]);
+  const [glows, setGlows] = useState({});
 
   // Election arrows
   useEffect(() => {
@@ -51,6 +53,35 @@ export default function TopologyMap({ nodes, elections, traffic }) {
     const t = setTimeout(() => setArrows([]), 900);
     return () => clearTimeout(t);
   }, [arrows]);
+
+  // Propagation logic
+  useEffect(() => {
+    if (!events?.length) return;
+    const last = events[events.length - 1];
+    if (last.type !== 'PROPAGATION') return;
+    if (Date.now() - new Date(last.timestamp).getTime() > 3000) return;
+
+    const d = last.data;
+    if (d.status === 'IN_PROGRESS') {
+      const p1 = getP(d.from_node);
+      const p2 = getP(d.to_node);
+      if (p1 && p2) {
+        const color = d.delay > 1.0 ? '#F59E0B' : '#3B82F6';
+        const dur = d.delay > 1.0 ? 3.0 : 0.5;
+        const newP = { id: Math.random(), p1, p2, color, dur };
+        setParticles(prev => [...prev, newP]);
+        setTimeout(() => {
+          setParticles(prev => prev.filter(p => p.id !== newP.id));
+        }, dur * 1000);
+      }
+    } else if (d.status === 'DELIVERED') {
+      setGlows(prev => ({ ...prev, [d.to_node]: 'var(--blue)' }));
+      setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
+    } else if (d.status === 'FAILED') {
+      setGlows(prev => ({ ...prev, [d.to_node]: 'var(--red)' }));
+      setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
+    }
+  }, [events]);
 
   return (
     <svg viewBox={`0 0 ${SIZE} ${SIZE}`} className="map-svg" style={{ maxHeight: '100%', maxWidth: '100%' }}>
@@ -95,6 +126,14 @@ export default function TopologyMap({ nodes, elections, traffic }) {
         );
       })}
 
+      {/* Propagation Particles */}
+      {particles.map(p => (
+        <circle key={p.id} r="5" fill={p.color} filter="url(#card-shadow)">
+          <animate attributeName="cx" values={`${p.p1.x};${p.p2.x}`} dur={`${p.dur}s`} fill="freeze" />
+          <animate attributeName="cy" values={`${p.p1.y};${p.p2.y}`} dur={`${p.dur}s`} fill="freeze" />
+        </circle>
+      ))}
+
       {/* Election arrows */}
       {arrows.map(arr => {
         const p1 = getP(arr.from), p2 = getP(arr.to);
@@ -116,9 +155,15 @@ export default function TopologyMap({ nodes, elections, traffic }) {
         const { fill, stroke, text } = nodeColors(node.status, node.role);
         const isLeader = node.role === 'LEADER';
         const isDead = node.status === 'DEAD';
+        const glow = glows[p.id];
 
         return (
           <g key={p.id} transform={`translate(${p.x},${p.y})`} style={{ transition: 'all 0.3s ease' }}>
+            {/* Dynamic Glow for Propagation */}
+            {glow && (
+               <circle r={NR + 15} fill={glow} opacity="0" className={glow === 'var(--red)' ? 'drop-pulse' : 'glow-burst'} />
+            )}
+
             {/* Card shadow bg */}
             <circle r={NR + 3} fill="#fff" filter="url(#card-shadow)" />
 
@@ -161,6 +206,17 @@ export default function TopologyMap({ nodes, elections, traffic }) {
             {node.role === 'CANDIDATE' && (
               <text y={NR + 16} fill="#92400E" fontSize="9" textAnchor="middle" fontWeight="700" fontFamily="Inter">
                 CANDIDATE
+              </text>
+            )}
+            
+            {glow === 'var(--blue)' && (
+               <text y={NR + 28} fill="var(--blue)" fontSize="9" textAnchor="middle" fontWeight="700" fontFamily="Inter">
+                RECEIVED
+              </text>
+            )}
+            {glow === 'var(--red)' && (
+               <text y={NR + 28} fill="var(--red)" fontSize="9" textAnchor="middle" fontWeight="700" fontFamily="Inter">
+                DROPPED
               </text>
             )}
           </g>

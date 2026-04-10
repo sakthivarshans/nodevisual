@@ -19,6 +19,7 @@ export default function DemoControls() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ restart_threshold: 1, latency_threshold: 800, cpu_threshold: 85, auto_recovery: true, cooldown_seconds: 30, chaos_mode: true })
             })}>⚡ Chaos Mode</button>
+            <button className="btn" style={{ background: 'var(--bg-alt)', color: 'var(--text)', borderColor: 'var(--border)' }} onClick={() => fetch('http://localhost:9000/propagate', { method: 'POST' })}>📨 Send Data</button>
             <button className="btn btn-green" onClick={() => {
                 [1,2,3,4,5].forEach(i => postAction(`node${i}`, 'recover'));
             }}>🔄 Reset All</button>

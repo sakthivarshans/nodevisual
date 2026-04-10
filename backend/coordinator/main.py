@@ -148,3 +148,31 @@ async def chaos_worker():
                 await client.post(url)
         except Exception:
             pass
+
+@app.post("/propagate")
+async def propagate_data():
+    import uuid
+    import httpx
+    
+    leader = await redis_c.get_value("leader:current")
+    if not leader:
+        leader = "node1"
+        
+    file_id = f"file_{str(uuid.uuid4())[:8]}"
+    
+    async def fire_and_forget():
+        try:
+            async with httpx.AsyncClient() as client:
+                # The port pattern relies on nodeX being mapped to 800X e.g. node1 => 8001
+                port = f"800{leader[-1]}"
+                await client.post(f"http://{leader}:{port}/receive_file", json={
+                    "file_id": file_id,
+                    "from_node": "COORDINATOR",
+                    "delay": 0
+                })
+        except Exception:
+            pass
+            
+    asyncio.create_task(fire_and_forget())
+            
+    return {"status": "initiated", "file_id": file_id, "origin": leader}

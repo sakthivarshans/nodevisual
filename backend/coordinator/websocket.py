@@ -32,7 +32,7 @@ manager = ConnectionManager()
 
 async def redis_listener():
     pubsub = await redis_c.get_subscriber(
-        "metrics", "heartbeat", "incident", "election", "response", "recovery", "leader_change"
+        "metrics", "heartbeat", "incident", "election", "response", "recovery", "leader_change", "propagation"
     )
     from datetime import datetime, timezone
     

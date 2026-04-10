@@ -118,3 +118,75 @@ async def receive_coordinator(req: Request):
     data = await req.json()
     election_mgr.handle_coordinator(data["leader"], data["term"])
     return {"status": "ok"}
+
+seen_files = set()
+
+@app.post("/receive_file")
+async def receive_file(req: Request):
+    data = await req.json()
+    asyncio.create_task(process_propagation(data))
+    return {"status": "accepted"}
+
+async def process_propagation(data: dict):
+    import httpx
+    file_id = data.get("file_id")
+    from_node = data.get("from_node")
+    
+    if file_id in seen_files:
+        return
+    seen_files.add(file_id)
+    
+    # Check if dead
+    if metrics_sim.is_dead:
+        await redis_c.publish("propagation", {
+            "from_node": from_node,
+            "to_node": NODE_ID,
+            "file_id": file_id,
+            "status": "FAILED",
+            "delay": 0
+        })
+        return
+        
+    # Process delay
+    delay = 3.0 if metrics_sim.slow_mode else 0.5
+    
+    # Publish delivery arrival at this node
+    await redis_c.publish("propagation", {
+        "from_node": from_node,
+        "to_node": NODE_ID,
+        "file_id": file_id,
+        "status": "DELIVERED",
+        "delay": delay
+    })
+    
+    await asyncio.sleep(delay)
+    
+    # Wait for leader assignment if checking election state loop
+    while election_mgr.current_leader is None and not metrics_sim.is_dead:
+        await asyncio.sleep(1)
+        
+    if metrics_sim.is_dead:
+        return
+    
+    # Forward to peers
+    for peer in hb_mgr.peers_last_seen.keys():
+        await redis_c.publish("propagation", {
+            "from_node": NODE_ID,
+            "to_node": peer,
+            "file_id": file_id,
+            "status": "IN_PROGRESS",
+            "delay": delay
+        })
+        
+        async def forward(p=peer):
+            try:
+                port = f"800{p[-1]}"
+                async with httpx.AsyncClient() as client:
+                    await client.post(f"http://{p}:{port}/receive_file", json={
+                        "file_id": file_id,
+                        "from_node": NODE_ID,
+                        "delay": delay
+                    })
+            except Exception:
+                pass
+        asyncio.create_task(forward())

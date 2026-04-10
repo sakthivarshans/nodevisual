@@ -8,6 +8,7 @@ const TYPE = {
   ELECTION:          { color: '#F59E0B', label: 'ELECTION',     dot: '#FCD34D' },
   RESPONSE:          { color: '#22C55E', label: 'RESPONSE',     dot: '#86EFAC' },
   RECOVERY:          { color: '#22C55E', label: 'RECOVERY',     dot: '#86EFAC' },
+  PROPAGATION:       { color: '#8B5CF6', label: 'TRANSFER',     dot: '#C4B5FD' },
 };
 
 export default function EventStream({ events }) {

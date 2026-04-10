@@ -89,6 +89,11 @@ export default function App() {
       setResponses(prev => [...prev.slice(-19), lastMessage]);
     } else if (type === 'RECOVERY') {
       setNodes(prev => ({ ...prev, [node_id]: { ...prev[node_id], status: 'HEALTHY', role: 'FOLLOWER' } }));
+    } else if (type === 'PROPAGATION') {
+      // Propagation handling happens mostly visually through passing the array to TopologyMap
+      // and natively appearing in the EventStream through `events` state.
+      // But we can store recent propagations to pass down for visualization context if needed.
+      // Since `events` already holds everything, we can just filter it inside children.
     }
   }, [lastMessage]);
 
@@ -177,7 +182,7 @@ export default function App() {
             </span>
           </div>
           <div className="map-area-inner">
-            <TopologyMap nodes={nodes} elections={elections} traffic={responses} />
+            <TopologyMap nodes={nodes} elections={elections} traffic={responses} events={events} />
           </div>
         </div>
 

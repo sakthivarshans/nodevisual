@@ -515,3 +515,23 @@ body {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.35; }
 }
+
+@keyframes fileGlow {
+  0% { transform: scale(1); opacity: 0.5; }
+  50% { transform: scale(1.3); opacity: 0.8; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+.glow-burst {
+  animation: fileGlow 0.5s ease-out forwards;
+}
+
+@keyframes dropPulse {
+  0% { transform: scale(1); opacity: 0.8; fill: var(--red); }
+  50% { transform: scale(1.5); opacity: 0; }
+  100% { transform: scale(1); opacity: 0; }
+}
+
+.drop-pulse {
+  animation: dropPulse 0.4s ease-out forwards;
+}
