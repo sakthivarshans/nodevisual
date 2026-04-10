@@ -1,0 +1,114 @@
+services:
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  node1:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn node.main:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node1
+      - PRIORITY=1
+      - PEERS=node2=http://node2:8002,node3=http://node3:8003,node4=http://node4:8004,node5=http://node5:8005
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  node2:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn node.main:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node2
+      - PRIORITY=2
+      - PEERS=node1=http://node1:8001,node3=http://node3:8003,node4=http://node4:8004,node5=http://node5:8005
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  node3:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn node.main:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node3
+      - PRIORITY=3
+      - PEERS=node1=http://node1:8001,node2=http://node2:8002,node4=http://node4:8004,node5=http://node5:8005
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  node4:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn node.main:app --host 0.0.0.0 --port 8004
+    ports:
+      - "8004:8004"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node4
+      - PRIORITY=4
+      - PEERS=node1=http://node1:8001,node2=http://node2:8002,node3=http://node3:8003,node5=http://node5:8005
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  node5:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn node.main:app --host 0.0.0.0 --port 8005
+    ports:
+      - "8005:8005"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - NODE_ID=node5
+      - PRIORITY=5
+      - PEERS=node1=http://node1:8001,node2=http://node2:8002,node3=http://node3:8003,node4=http://node4:8004
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  coordinator:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: uvicorn coordinator.main:app --host 0.0.0.0 --port 9000
+    ports:
+      - "9000:9000"
+    environment:
+      - REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+      - node1
+      - node2
+      - node3
+      - node4
+      - node5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    depends_on:
+      - coordinator
+    restart: unless-stopped
