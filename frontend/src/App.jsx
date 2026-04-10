@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import TopologyMap from './components/TopologyMap';
 import NodeCard from './components/NodeCard';
@@ -7,43 +7,44 @@ import EventStream from './components/EventStream';
 import ElectionVisualizer from './components/ElectionVisualizer';
 import DemoControls from './components/DemoControls';
 import PolicyPanel from './components/PolicyPanel';
-import { Clock } from 'lucide-react';
+
+const INIT_NODES = Object.fromEntries(
+  [1, 2, 3, 4, 5].map(i => [`node${i}`, {
+    role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now()
+  }])
+);
 
 export default function App() {
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:9000/ws');
-  
-  const [nodes, setNodes] = useState({
-    node1: { role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now() },
-    node2: { role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now() },
-    node3: { role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now() },
-    node4: { role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now() },
-    node5: { role: 'FOLLOWER', metrics: null, status: 'HEALTHY', lastHeartbeat: Date.now() },
-  });
-  
+
+  const [nodes, setNodes] = useState(INIT_NODES);
   const [incidents, setIncidents] = useState([]);
   const [events, setEvents] = useState([]);
   const [elections, setElections] = useState([]);
   const [responses, setResponses] = useState([]);
   const [time, setTime] = useState(new Date().toLocaleTimeString());
+  const [violatedNodes, setViolatedNodes] = useState([]);
+  const [policyThresholds, setPolicyThresholds] = useState({ latency: 800, cpu: 85 });
 
   useEffect(() => {
-    const timer = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => setTime(new Date().toLocaleTimeString()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
     if (!lastMessage) return;
-    
-    const { type, timestamp, node_id, data } = lastMessage;
+    const { type, node_id, data } = lastMessage;
     setEvents(prev => [...prev.slice(-199), lastMessage]);
-    
+
     if (type === 'METRICS') {
       setNodes(prev => ({
         ...prev,
-        [node_id]: { 
-          ...prev[node_id], 
+        [node_id]: {
+          ...prev[node_id],
           metrics: data,
-          status: prev[node_id].status === 'DEAD' ? 'DEAD' : (data.error_rate > 10 || data.latency_ms > 800 ? 'DEGRADED' : 'HEALTHY')
+          status: prev[node_id].status === 'DEAD' ? 'DEAD'
+            : (data.error_rate > 10 || data.latency_ms > policyThresholds.latency || data.cpu_percent > policyThresholds.cpu
+              ? 'DEGRADED' : 'HEALTHY')
         }
       }));
     } else if (type === 'HEARTBEAT') {
@@ -53,100 +54,202 @@ export default function App() {
       }));
     } else if (type === 'INCIDENT' || type === 'INCIDENT_RESOLVED') {
       setIncidents(prev => {
-        const existing = prev.findIndex(i => i.id === data.id);
-        if (existing >= 0) {
-          const next = [...prev];
-          next[existing] = data;
-          return next;
-        }
+        const idx = prev.findIndex(i => i.id === data.id);
+        if (idx >= 0) { const n = [...prev]; n[idx] = data; return n; }
         return [data, ...prev].slice(0, 50);
       });
       if (data.rule_triggered === 'NODE_DOWN') {
         setNodes(prev => ({
-          ...prev, [node_id]: { ...prev[node_id], status: type === 'INCIDENT_RESOLVED' ? 'HEALTHY' : 'DEAD', role: type === 'INCIDENT_RESOLVED' ? 'FOLLOWER' : 'DEAD' }
+          ...prev,
+          [node_id]: {
+            ...prev[node_id],
+            status: type === 'INCIDENT_RESOLVED' ? 'HEALTHY' : 'DEAD',
+            role: type === 'INCIDENT_RESOLVED' ? 'FOLLOWER' : 'DEAD'
+          }
         }));
       }
     } else if (type === 'ELECTION') {
       setElections(prev => [...prev.slice(-99), lastMessage]);
       if (data.type === 'COORDINATOR') {
-          setNodes(prev => {
-              const next = {...prev};
-              Object.keys(next).forEach(k => {
-                  if (next[k].status !== 'DEAD') {
-                      next[k].role = k === data.from_node ? 'LEADER' : 'FOLLOWER';
-                  }
-              });
-              return next;
+        setNodes(prev => {
+          const next = { ...prev };
+          Object.keys(next).forEach(k => {
+            if (next[k].status !== 'DEAD')
+              next[k] = { ...next[k], role: k === data.from_node ? 'LEADER' : 'FOLLOWER' };
           });
+          return next;
+        });
       } else if (data.type === 'ELECTION_START' || data.type === 'ELECTION') {
-          setNodes(prev => {
-              if (prev[node_id]?.status === 'DEAD') return prev;
-              return { ...prev, [node_id]: { ...prev[node_id], role: 'CANDIDATE' } };
-          });
+        setNodes(prev => {
+          if (prev[node_id]?.status === 'DEAD') return prev;
+          return { ...prev, [node_id]: { ...prev[node_id], role: 'CANDIDATE' } };
+        });
       }
     } else if (type === 'RESPONSE') {
-        setResponses(prev => [...prev.slice(-19), lastMessage]);
+      setResponses(prev => [...prev.slice(-19), lastMessage]);
     } else if (type === 'RECOVERY') {
-        setNodes(prev => ({ ...prev, [node_id]: { ...prev[node_id], status: 'HEALTHY', role: 'FOLLOWER' }}));
+      setNodes(prev => ({ ...prev, [node_id]: { ...prev[node_id], status: 'HEALTHY', role: 'FOLLOWER' } }));
     }
   }, [lastMessage]);
 
-  const leader = Object.keys(nodes).find(k => nodes[k].role === 'LEADER') || 'NONE';
+  const handlePolicyUpdate = useCallback((cfg) => {
+    setPolicyThresholds({ latency: cfg.latency_threshold, cpu: cfg.cpu_threshold });
+    setNodes(prev => {
+      const violated = Object.entries(prev)
+        .filter(([, d]) => d.metrics && (
+          d.metrics.latency_ms > cfg.latency_threshold || d.metrics.cpu_percent > cfg.cpu_threshold
+        ))
+        .map(([id]) => id);
+      setViolatedNodes(violated);
+      setTimeout(() => setViolatedNodes([]), 2000);
+      return prev;
+    });
+  }, []);
+
+  const leader = Object.keys(nodes).find(k => nodes[k].role === 'LEADER') || 'None';
   const healthyCount = Object.values(nodes).filter(n => n.status === 'HEALTHY').length;
   const activeIncidents = incidents.filter(i => i.status === 'ACTIVE').length;
 
   return (
-    <div className="dashboard-grid">
-      <div className="panel header-panel">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
-          <h1 style={{ margin: 0, fontSize: '18px', letterSpacing: '2px', color: 'var(--accent-cyan)', fontWeight: 600 }}>
-            DISTRIBUTED INCIDENT RESPONSE SYSTEM
-          </h1>
+    <div className="layout">
+
+      {/* ── Header ──────────────────────────────────────────── */}
+      <header className="header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{
+              width: 28, height: 28, background: 'var(--blue)', borderRadius: 7,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontSize: 14, color: '#fff', fontWeight: 700, flexShrink: 0
+            }}>D</div>
+            <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--text)', letterSpacing: '-0.2px' }}>
+              DIRS <span style={{ fontWeight: 400, color: 'var(--text-2)', fontSize: 12 }}>· Incident Response</span>
+            </span>
+          </div>
           <DemoControls />
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '24px', fontSize: '14px' }} className="mono">
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ color: healthyCount === 5 ? 'var(--accent-success)' : 'var(--accent-warning)'}}>{healthyCount}/5 NODES HEALTHY</span>
-            <span style={{ color: 'var(--border)' }}>|</span>
-            <span style={{ color: activeIncidents > 0 ? 'var(--accent-danger)' : 'var(--text-secondary)'}}>{activeIncidents} ACTIVE INCIDENTS</span>
-            <span style={{ color: 'var(--border)' }}>|</span>
-            <span style={{ color: 'var(--accent-warning)' }}>LEADER: {leader.toUpperCase()}</span>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div className="stat-pill">
+            <span style={{
+              width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
+              background: healthyCount === 5 ? 'var(--green)' : 'var(--amber)',
+              display: 'inline-block'
+            }} />
+            <span style={{ color: 'var(--text-2)' }}>{healthyCount}/5 Healthy</span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--text-secondary)' }}>
-            <Clock size={16} /> {time}
+
+          {activeIncidents > 0 && (
+            <div className="stat-pill" style={{ background: 'var(--red-light)', borderColor: '#FECACA' }}>
+              <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--red)', display: 'inline-block', flexShrink: 0 }} />
+              <span style={{ color: 'var(--red)', fontWeight: 600 }}>{activeIncidents} Active</span>
+            </div>
+          )}
+
+          <div className="stat-pill">
+            <span style={{ color: 'var(--text-2)' }}>Leader:</span>
+            <span style={{ fontWeight: 600, color: 'var(--green)', fontFamily: 'JetBrains Mono', fontSize: 11 }}>
+              {leader}
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-             <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: isConnected ? 'var(--accent-success)' : 'var(--accent-danger)', boxShadow: isConnected ? '0 0 10px var(--accent-success)' : '0 0 10px var(--accent-danger)' }}></div>
-             {isConnected ? 'LIVE' : 'DISCONNECTED'}
+
+          <div className="stat-pill">
+            <span className={`conn-dot ${isConnected ? 'conn-dot-live' : 'conn-dot-dead'}`} />
+            <span style={{ color: isConnected ? 'var(--green)' : 'var(--red)', fontWeight: 500 }}>
+              {isConnected ? 'Connected' : 'Offline'}
+            </span>
+          </div>
+
+          <div style={{ fontSize: 12, color: 'var(--text-3)', fontFamily: 'JetBrains Mono', paddingLeft: 4 }}>
+            {time}
+          </div>
+        </div>
+      </header>
+
+      {/* ── Main Section ────────────────────────────────────── */}
+      <div className="main-section">
+
+        {/* Topology (65%) */}
+        <div className="map-area">
+          <div style={{ marginBottom: 10, flexShrink: 0 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.7px' }}>
+              Network Topology
+            </span>
+          </div>
+          <div className="map-area-inner">
+            <TopologyMap nodes={nodes} elections={elections} traffic={responses} />
+          </div>
+        </div>
+
+        {/* Sidebar (35%) */}
+        <div className="sidebar">
+          <div style={{ padding: '12px 16px 0', flexShrink: 0, borderBottom: '1px solid var(--border)', paddingBottom: 10 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-2)', textTransform: 'uppercase', letterSpacing: '0.7px' }}>
+              Node Status
+            </span>
+          </div>
+          <div className="sidebar-scroll">
+            {Object.keys(nodes).map(nodeId => (
+              <NodeCard
+                key={nodeId}
+                nodeId={nodeId}
+                data={nodes[nodeId]}
+                activeIncident={incidents.find(i => i.node_id === nodeId && i.status === 'ACTIVE')}
+                violated={violatedNodes.includes(nodeId)}
+              />
+            ))}
+            <PolicyPanel nodes={nodes} onPolicyUpdate={handlePolicyUpdate} />
           </div>
         </div>
       </div>
 
-      <div className="panel map-panel">
-         <h2 style={{margin: '0 0 16px 0', fontSize: '14px', color: 'var(--text-secondary)'}}>NETWORK TOPOLOGY</h2>
-         <TopologyMap nodes={nodes} elections={elections} traffic={responses} />
-      </div>
+      {/* ── Bottom Section ───────────────────────────────────── */}
+      <div className="bottom-section">
 
-      <div className="sidebar-panel">
-         {Object.keys(nodes).map(nodeId => (
-             <NodeCard key={nodeId} nodeId={nodeId} data={nodes[nodeId]} activeIncident={incidents.find(i => i.node_id === nodeId && i.status === 'ACTIVE')} />
-         ))}
-         <PolicyPanel />
-      </div>
+        <div className="panel">
+          <div className="panel-inner">
+            <div className="panel-header">
+              <div className="panel-title">
+                <span className="panel-title-dot" style={{ background: 'var(--red)' }} />
+                Live Incidents
+              </div>
+              {activeIncidents > 0 && (
+                <span className="badge badge-red">{activeIncidents} active</span>
+              )}
+            </div>
+            <div className="panel-scroll">
+              <IncidentTimeline incidents={incidents} />
+            </div>
+          </div>
+        </div>
 
-      <div className="events-panel">
-         <div className="panel" style={{ overflow: 'hidden', padding: '12px' }}>
-            <h2 style={{margin: '0 0 12px 0', fontSize: '12px', color: 'var(--text-secondary)'}}>LIVE INCIDENTS</h2>
-            <IncidentTimeline incidents={incidents} />
-         </div>
-         <div className="panel" style={{ overflow: 'hidden', padding: '12px' }}>
-            <h2 style={{margin: '0 0 12px 0', fontSize: '12px', color: 'var(--text-secondary)'}}>EVENT STREAM (REDIS PUB/SUB)</h2>
-            <EventStream events={events} />
-         </div>
-         <div className="panel" style={{ overflow: 'hidden', padding: '12px' }}>
-            <h2 style={{margin: '0 0 12px 0', fontSize: '12px', color: 'var(--text-secondary)'}}>ELECTION VISUALIZER</h2>
-            <ElectionVisualizer elections={elections} leader={leader} />
-         </div>
+        <div className="panel">
+          <div className="panel-inner">
+            <div className="panel-header">
+              <div className="panel-title">
+                <span className="panel-title-dot" style={{ background: 'var(--blue)' }} />
+                Event Stream
+              </div>
+              <span className="badge badge-blue">{events.length} events</span>
+            </div>
+            <div className="panel-scroll">
+              <EventStream events={events} />
+            </div>
+          </div>
+        </div>
+
+        <div className="panel" style={{ borderRight: 'none' }}>
+          <div className="panel-inner">
+            <div className="panel-header">
+              <div className="panel-title">
+                <span className="panel-title-dot" style={{ background: 'var(--amber)' }} />
+                Election Visualizer
+              </div>
+            </div>
+            <ElectionVisualizer elections={elections} leader={leader} nodes={nodes} />
+          </div>
+        </div>
+
       </div>
     </div>
   );
