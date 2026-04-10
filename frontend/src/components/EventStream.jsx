@@ -28,7 +28,11 @@ export default function EventStream({ events }) {
         </div>
       ) : (
         <div style={{ overflowY: 'auto', flex: 1 }}>
-          {events.slice(-80).map((ev, i) => {
+          {events.filter(e => {
+             if (e.type === 'HEARTBEAT') return false;
+             if (e.type === 'PROPAGATION' && e.data?.status !== 'FAILED') return false;
+             return true;
+          }).slice(-80).map((ev, i) => {
             const cfg = TYPE[ev.type] || { color: '#9CA3AF', label: ev.type, dot: '#D1D5DB' };
             const ts = new Date(ev.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 

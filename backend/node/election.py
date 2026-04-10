@@ -3,6 +3,7 @@ import httpx
 import os
 from datetime import datetime, timezone
 from shared.redis_client import redis_c
+from .metrics import metrics_sim
 
 NODE_ID = os.getenv("NODE_ID", "node1")
 PRIORITY = int(os.getenv("PRIORITY", "1"))
@@ -21,8 +22,15 @@ class ElectionManager:
         self.current_term = 0
         self.election_in_progress = False
         self.is_dead = False
+        self.candidates = {}
         
-    async def send_event(self, type_str, to_node=None):
+    def get_health_score(self):
+        m = metrics_sim.get_metrics()
+        err_ratio = m["error_rate"] / 100.0
+        score = (100 - m["cpu_percent"]) * 0.4 + (1000 - m["latency_ms"]) * 0.4 + (100 - err_ratio * 100) * 0.2
+        return round(max(0, score), 2)
+
+    async def send_event(self, type_str, to_node=None, score=None):
         payload = {
             "type": type_str,
             "from_node": NODE_ID,
@@ -30,6 +38,8 @@ class ElectionManager:
             "to_node": to_node,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
+        if score is not None:
+            payload["score"] = score
         await redis_c.publish("election", payload)
         
     async def start_election(self):
@@ -40,35 +50,45 @@ class ElectionManager:
         self.role = "CANDIDATE"
         self.current_term += 1
         self.current_leader = None
+        self.candidates.clear()
         
-        await self.send_event("ELECTION_START")
+        my_score = self.get_health_score()
+        self.candidates[NODE_ID] = my_score
         
-        # In Bully, election goes to nodes with higher IDs
-        higher_nodes = {k: v for k, v in PEERS_MAP.items() if int(k.replace('node', '')) > PRIORITY}
+        await self.send_event("ELECTION_DETECTED")
+        await self.send_event("CANDIDATE_SCORE", score=my_score)
         
-        if not higher_nodes:
-            await self.declare_victory()
-            return
-            
-        responses = 0
         async with httpx.AsyncClient(timeout=2.0) as client:
-            for n_id, url in higher_nodes.items():
-                await self.send_event("ELECTION", to_node=n_id)
+            for p, url in PEERS_MAP.items():
                 try:
-                    res = await client.post(f"{url}/election", json={"from_node": NODE_ID, "term": self.current_term})
-                    if res.status_code == 200 and res.json().get("status") == "OK":
-                        responses += 1
+                    await client.post(f"{url}/election", json={"from_node": NODE_ID, "term": self.current_term, "score": my_score})
                 except Exception:
                     pass
                     
-        # Give higher nodes a chance to take over if they said OK
-        if responses == 0:
-            await asyncio.sleep(2)
-            if self.role == "CANDIDATE":
-                await self.declare_victory()
+        await asyncio.sleep(2)
+        
+        if self.is_dead or not self.election_in_progress:
+            return
+            
+        best_node = NODE_ID
+        best_score = my_score
+        
+        for n_id, sc in self.candidates.items():
+            if sc > best_score:
+                best_score = sc
+                best_node = n_id
+            elif sc == best_score:
+                n1_prio = int(n_id.replace('node', ''))
+                best_prio = int(best_node.replace('node', ''))
+                if n1_prio > best_prio:
+                    best_node = n_id
+                    
+        if best_node == NODE_ID:
+            await self.declare_victory()
         else:
             self.role = "FOLLOWER"
             self.election_in_progress = False
+            self.candidates.clear()
 
     async def handle_election_request(self, payload):
         if self.is_dead:
@@ -76,20 +96,18 @@ class ElectionManager:
             
         from_node = payload["from_node"]
         term = payload["term"]
+        score = payload.get("score")
         
         if term > self.current_term:
             self.current_term = term
-            self.role = "FOLLOWER"
             self.current_leader = None
-            
-        from_prio = int(from_node.replace('node', ''))
-        
-        if PRIORITY > from_prio:
-            await self.send_event("OK", to_node=from_node)
             if not self.election_in_progress:
                 asyncio.create_task(self.start_election())
-            return True
-        return False
+                
+        if score is not None:
+            self.candidates[from_node] = score
+            
+        return True
         
     async def declare_victory(self):
         if self.is_dead:
@@ -97,6 +115,8 @@ class ElectionManager:
         self.role = "LEADER"
         self.current_leader = NODE_ID
         self.election_in_progress = False
+        self.candidates.clear()
+        
         await self.send_event("COORDINATOR", to_node="ALL")
         async with httpx.AsyncClient(timeout=2.0) as client:
             for n_id, url in PEERS_MAP.items():
@@ -108,6 +128,7 @@ class ElectionManager:
     def step_down(self):
         self.role = "FOLLOWER"
         self.election_in_progress = False
+        self.candidates.clear()
         
     def handle_coordinator(self, leader_id, term):
         if term >= self.current_term or leader_id != self.current_leader:
@@ -115,3 +136,4 @@ class ElectionManager:
             self.current_leader = leader_id
             self.role = "FOLLOWER"
             self.election_in_progress = False
+            self.candidates.clear()

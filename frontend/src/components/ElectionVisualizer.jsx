@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 function stepStyle(d) {
-  if (d.type === 'COORDINATOR')    return { bg: '#F0FDF4', border: '#BBF7D0', color: '#15803D', icon: '👑' };
-  if (d.type === 'ELECTION_START') return { bg: '#FFFBEB', border: '#FDE68A', color: '#92400E', icon: '⚡' };
-  if (d.type === 'ELECTION')       return { bg: '#FFFBEB', border: '#FDE68A', color: '#92400E', icon: '⚡' };
-  if (d.type === 'OK')             return { bg: '#F0FDF4', border: '#BBF7D0', color: '#15803D', icon: '✓' };
+  if (d.type === 'COORDINATOR')       return { bg: '#F0FDF4', border: '#BBF7D0', color: '#15803D', icon: '👑' };
+  if (d.type === 'ELECTION_DETECTED') return { bg: '#FEF2F2', border: '#FECACA', color: '#B91C1C', icon: '🚨' };
+  if (d.type === 'CANDIDATE_SCORE')   return { bg: '#FFFBEB', border: '#FDE68A', color: '#92400E', icon: '📊' };
+  if (d.type === 'COMPARING')         return { bg: '#F3E8FF', border: '#E9D5FF', color: '#6B21A8', icon: '⚖️' };
   return { bg: '#F9FAFB', border: '#E5E7EB', color: '#6B7280', icon: '→' };
 }
 
@@ -34,12 +34,19 @@ export default function ElectionVisualizer({ elections, leader, nodes }) {
     setIsElecting(!isFinal);
 
     let label = '';
-    if (d.type === 'ELECTION_START') label = `Election started by ${d.from_node}`;
-    else if (d.type === 'COORDINATOR') label = `${d.from_node} elected as Leader`;
-    else if (d.type === 'OK') label = `${d.from_node} → OK → ${d.to_node}`;
+    if (d.type === 'ELECTION_DETECTED') label = `Leader failure detected by ${d.from_node.replace('node', 'Node ')}`;
+    else if (d.type === 'COORDINATOR') label = `${d.from_node.replace('node', 'Node ')} selected as new leader`;
+    else if (d.type === 'CANDIDATE_SCORE') label = `${d.from_node.replace('node', 'Node ')} broadcasting health score: ${d.score}`;
     else label = `${d.from_node} ${d.type} → ${d.to_node || 'ALL'}`;
 
-    setSteps(prev => [...prev.slice(-19), { id: Math.random(), d, label, ts: Date.now() }]);
+    if (d.type === 'COORDINATOR') {
+      setSteps(prev => [...prev.slice(-18), 
+        { id: Math.random(), d: { type: 'COMPARING' }, label: 'Comparing candidates...', ts: Date.now() - 50 },
+        { id: Math.random(), d, label, ts: Date.now() }
+      ]);
+    } else {
+      setSteps(prev => [...prev.slice(-19), { id: Math.random(), d, label, ts: Date.now() }]);
+    }
     setTimeout(() => drain(), 500);
   }
 

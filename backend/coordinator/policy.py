@@ -7,5 +7,6 @@ class PolicyConfig(BaseModel):
     auto_recovery: bool = True
     cooldown_seconds: int = 30
     chaos_mode: bool = False
+    demo_active: bool = False
 
 config = PolicyConfig()

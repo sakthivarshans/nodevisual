@@ -70,10 +70,18 @@ class HeartbeatManager:
                     if peer_id in self.suspected_nodes:
                         self.suspected_nodes.remove(peer_id)
                     
+            if not leader_dead and self.election_manager.current_leader and self.election_manager.current_leader != NODE_ID:
+                m = await redis_c.get_value(f"node:{self.election_manager.current_leader}:metrics")
+                if m:
+                    err = m["error_rate"] / 100.0
+                    sc = (100 - m["cpu_percent"])*0.4 + (1000 - m["latency_ms"])*0.4 + (100 - err*100)*0.2
+                    if sc < 150:
+                        leader_dead = True
+
             if leader_dead and self.election_manager.current_leader != NODE_ID:
                 asyncio.create_task(self.election_manager.start_election())
                 
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
 
     def receive_heartbeat(self, payload):
         if self.is_dead:

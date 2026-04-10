@@ -26,12 +26,29 @@ async def metrics_publisher():
             await redis_c.set_value(f"node:{NODE_ID}:status", election_mgr.role, ttl=30)
         await asyncio.sleep(3)
 
+async def stream_worker():
+    import uuid
+    while True:
+        await asyncio.sleep(1.5)
+        policy_raw = await redis_c.get_value("policy:config")
+        demo_active = policy_raw.get("demo_active", False) if policy_raw else False
+        
+        if demo_active and election_mgr.role == "LEADER" and not metrics_sim.is_dead and not election_mgr.election_in_progress:
+            packet_id = f"pkt_{str(uuid.uuid4())[:8]}"
+            asyncio.create_task(process_propagation({
+                "packet_id": packet_id,
+                "from_node": "COORDINATOR",
+                "ttl": 5,
+                "path": []
+            }))
+
 @app.on_event("startup")
 async def startup_event():
     hb_mgr.running = True
     asyncio.create_task(hb_mgr.ping_peers())
     asyncio.create_task(hb_mgr.check_faults())
     asyncio.create_task(metrics_publisher())
+    asyncio.create_task(stream_worker())
     
     # Wait for things to settle, then maybe initiate election
     await asyncio.sleep(5)
@@ -129,64 +146,104 @@ async def receive_file(req: Request):
 
 async def process_propagation(data: dict):
     import httpx
-    file_id = data.get("file_id")
+    packet_id = data.get("packet_id")
     from_node = data.get("from_node")
+    path = data.get("path", [])
+    ttl = data.get("ttl", 5)
     
-    if file_id in seen_files:
+    if packet_id in seen_files:
         return
-    seen_files.add(file_id)
+    seen_files.add(packet_id)
     
-    # Check if dead
+    if ttl <= 0:
+        return
+    
     if metrics_sim.is_dead:
         await redis_c.publish("propagation", {
             "from_node": from_node,
             "to_node": NODE_ID,
-            "file_id": file_id,
+            "packet_id": packet_id,
             "status": "FAILED",
-            "delay": 0
+            "delay": 0,
+            "ttl": ttl,
+            "path": path
         })
         return
         
-    # Process delay
-    delay = 3.0 if metrics_sim.slow_mode else 0.5
+    score = election_mgr.get_health_score()
     
-    # Publish delivery arrival at this node
+    if score > 150:
+        delay = 0.5
+    elif score > 50:
+        delay = 1.5
+    else:
+        delay = 3.0
+        
+    new_path = path + [NODE_ID]
+    
     await redis_c.publish("propagation", {
         "from_node": from_node,
         "to_node": NODE_ID,
-        "file_id": file_id,
+        "packet_id": packet_id,
         "status": "DELIVERED",
-        "delay": delay
+        "delay": delay,
+        "ttl": ttl,
+        "path": new_path
     })
     
     await asyncio.sleep(delay)
     
-    # Wait for leader assignment if checking election state loop
     while election_mgr.current_leader is None and not metrics_sim.is_dead:
         await asyncio.sleep(1)
         
-    if metrics_sim.is_dead:
+    if metrics_sim.is_dead or ttl - 1 <= 0:
         return
     
-    # Forward to peers
+    peer_scores = []
     for peer in hb_mgr.peers_last_seen.keys():
-        await redis_c.publish("propagation", {
-            "from_node": NODE_ID,
-            "to_node": peer,
-            "file_id": file_id,
-            "status": "IN_PROGRESS",
-            "delay": delay
-        })
+        if peer in new_path: continue
         
-        async def forward(p=peer):
-            try:
-                port = f"800{p[-1]}"
-                async with httpx.AsyncClient() as client:
-                    await client.post(f"http://{p}:{port}/receive_file", json={
-                        "file_id": file_id,
-                        "from_node": NODE_ID,
-                        "delay": delay
-                    })
-            except Exception:
-                pass
-        asyncio.create_task(forward())
+        status = await redis_c.get_value(f"node:{peer}:status")
+        if status == "DEAD": continue
+            
+        m = await redis_c.get_value(f"node:{peer}:metrics")
+        sc = 100
+        if m:
+            err = m["error_rate"] / 100.0
+            sc = (100 - m["cpu_percent"])*0.4 + (1000 - m["latency_ms"])*0.4 + (100 - err*100)*0.2
+            
+        peer_scores.append({"id": peer, "score": sc})
+        
+    if not peer_scores:
+        return
+        
+    def get_num(n): return int(n.replace('node', ''))
+    peer_scores.sort(key=lambda x: get_num(x["id"]))
+    
+    target_peer = peer_scores[0]["id"]
+    
+    await redis_c.publish("propagation", {
+        "from_node": NODE_ID,
+        "to_node": target_peer,
+        "packet_id": packet_id,
+        "status": "IN_PROGRESS",
+        "delay": delay,
+        "ttl": ttl - 1,
+        "path": new_path
+    })
+    
+    async def forward(p=target_peer):
+        try:
+            port = f"800{p[-1]}"
+            async with httpx.AsyncClient() as client:
+                await client.post(f"http://{p}:{port}/receive_file", json={
+                    "packet_id": packet_id,
+                    "from_node": NODE_ID,
+                    "delay": delay,
+                    "ttl": ttl - 1,
+                    "path": new_path
+                })
+        except Exception:
+            pass
+    
+    asyncio.create_task(forward())

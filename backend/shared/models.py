@@ -24,6 +24,7 @@ class HeartbeatPayload(BaseModel):
 class ElectionPayload(BaseModel):
     from_node: str
     term: int
+    score: Optional[float] = None
 
 class CoordinatorPayload(BaseModel):
     leader: str
@@ -42,6 +43,8 @@ class IncidentRecord(BaseModel):
 class PropagationPayload(BaseModel):
     from_node: str
     to_node: Optional[str] = None
-    file_id: str
+    packet_id: str
     status: str
     delay: float
+    ttl: int
+    path: Optional[List[str]] = []

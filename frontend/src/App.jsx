@@ -90,10 +90,21 @@ export default function App() {
     } else if (type === 'RECOVERY') {
       setNodes(prev => ({ ...prev, [node_id]: { ...prev[node_id], status: 'HEALTHY', role: 'FOLLOWER' } }));
     } else if (type === 'PROPAGATION') {
-      // Propagation handling happens mostly visually through passing the array to TopologyMap
-      // and natively appearing in the EventStream through `events` state.
-      // But we can store recent propagations to pass down for visualization context if needed.
-      // Since `events` already holds everything, we can just filter it inside children.
+      if (data.status === 'DELIVERED' || data.status === 'IN_PROGRESS') {
+        setNodes(prev => {
+          const target = data.status === 'DELIVERED' ? data.to_node : data.from_node;
+          if (!prev[target]) return prev;
+          if (prev[target].lastPacket === data.packet_id) return prev;
+          
+          return {
+            ...prev,
+            [target]: {
+              ...prev[target],
+              lastPacket: data.packet_id
+            }
+          };
+        });
+      }
     }
   }, [lastMessage]);
 

@@ -122,6 +122,7 @@ async def update_policy(new_config: PolicyConfig):
     config.cpu_threshold = new_config.cpu_threshold
     config.auto_recovery = new_config.auto_recovery
     config.cooldown_seconds = new_config.cooldown_seconds
+    config.demo_active = getattr(new_config, 'demo_active', False)
     
     # Chaos mode toggle
     if new_config.chaos_mode and not config.chaos_mode:
@@ -137,7 +138,7 @@ async def chaos_worker():
     import random
     import httpx
     while config.chaos_mode:
-        await asyncio.sleep(random.randint(20, 40))
+        await asyncio.sleep(random.randint(5, 12))
         if not config.chaos_mode: break
         
         target = random.randint(1, 5)

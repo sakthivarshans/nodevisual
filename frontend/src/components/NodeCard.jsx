@@ -57,8 +57,21 @@ export default function NodeCard({ nodeId, data, activeIncident, violated }) {
         {statusBadge}
       </div>
 
-      <div style={{ fontSize: 11, color: 'var(--text-3)', marginBottom: data.metrics && !isDead ? 12 : 0, fontFamily: 'JetBrains Mono' }}>
-        Last heartbeat: <span style={{ color: timeSince > 5 ? 'var(--red)' : 'var(--text-2)', fontWeight: 500 }}>{timeSince}s ago</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: data.metrics && !isDead ? 12 : 0 }}>
+        <div style={{ fontSize: 11, color: 'var(--text-3)', fontFamily: 'JetBrains Mono' }}>
+          Last heartbeat: <span style={{ color: timeSince > 5 ? 'var(--red)' : 'var(--text-2)', fontWeight: 500 }}>{timeSince}s ago</span>
+        </div>
+        
+        {data.lastPacket && !isDead && (
+          <div style={{ 
+            display: 'flex', alignItems: 'center', gap: 6, 
+            background: 'var(--blue-light)', padding: '2px 6px', 
+            borderRadius: 'var(--radius-xs)', border: '1px solid #BFDBFE' 
+          }}>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#1D4ED8', textTransform: 'uppercase' }}>PKT</span>
+            <span style={{ fontSize: 10, color: '#1E3A8A', fontFamily: 'JetBrains Mono', fontWeight: 600 }}>{data.lastPacket}</span>
+          </div>
+        )}
       </div>
 
       {data.metrics && !isDead && (

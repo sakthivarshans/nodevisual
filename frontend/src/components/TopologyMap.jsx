@@ -54,33 +54,42 @@ export default function TopologyMap({ nodes, elections, traffic, events }) {
     return () => clearTimeout(t);
   }, [arrows]);
 
+  const lastPropTsRef = useRef(0);
+
   // Propagation logic
   useEffect(() => {
     if (!events?.length) return;
-    const last = events[events.length - 1];
-    if (last.type !== 'PROPAGATION') return;
-    if (Date.now() - new Date(last.timestamp).getTime() > 3000) return;
+    
+    const newProps = events.filter(e => 
+      e.type === 'PROPAGATION' && 
+      new Date(e.timestamp).getTime() > lastPropTsRef.current
+    );
+    
+    if (!newProps.length) return;
+    lastPropTsRef.current = new Date(events[events.length - 1].timestamp).getTime();
 
-    const d = last.data;
-    if (d.status === 'IN_PROGRESS') {
-      const p1 = getP(d.from_node);
-      const p2 = getP(d.to_node);
-      if (p1 && p2) {
-        const color = d.delay > 1.0 ? '#F59E0B' : '#3B82F6';
-        const dur = d.delay > 1.0 ? 3.0 : 0.5;
-        const newP = { id: Math.random(), p1, p2, color, dur };
-        setParticles(prev => [...prev, newP]);
-        setTimeout(() => {
-          setParticles(prev => prev.filter(p => p.id !== newP.id));
-        }, dur * 1000);
+    newProps.forEach(last => {
+      const d = last.data;
+      if (d.status === 'IN_PROGRESS') {
+        const p1 = getP(d.from_node);
+        const p2 = getP(d.to_node);
+        if (p1 && p2) {
+          const color = d.delay > 1.0 ? '#F59E0B' : '#3B82F6';
+          const dur = d.delay > 1.0 ? 3.0 : 0.5;
+          const newP = { id: Math.random(), p1, p2, color, dur };
+          setParticles(prev => [...prev, newP]);
+          setTimeout(() => {
+            setParticles(prev => prev.filter(p => p.id !== newP.id));
+          }, dur * 1000);
+        }
+      } else if (d.status === 'DELIVERED') {
+        setGlows(prev => ({ ...prev, [d.to_node]: 'var(--blue)' }));
+        setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
+      } else if (d.status === 'FAILED') {
+        setGlows(prev => ({ ...prev, [d.to_node]: 'var(--red)' }));
+        setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
       }
-    } else if (d.status === 'DELIVERED') {
-      setGlows(prev => ({ ...prev, [d.to_node]: 'var(--blue)' }));
-      setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
-    } else if (d.status === 'FAILED') {
-      setGlows(prev => ({ ...prev, [d.to_node]: 'var(--red)' }));
-      setTimeout(() => setGlows(prev => ({ ...prev, [d.to_node]: null })), 800);
-    }
+    });
   }, [events]);
 
   return (
@@ -197,7 +206,6 @@ export default function TopologyMap({ nodes, elections, traffic, events }) {
               </text>
             )}
 
-            {/* Role badges below */}
             {isLeader && (
               <text y={NR + 16} fill="#15803D" fontSize="9" textAnchor="middle" fontWeight="700" fontFamily="Inter">
                 LEADER
@@ -207,6 +215,15 @@ export default function TopologyMap({ nodes, elections, traffic, events }) {
               <text y={NR + 16} fill="#92400E" fontSize="9" textAnchor="middle" fontWeight="700" fontFamily="Inter">
                 CANDIDATE
               </text>
+            )}
+            
+            {node.lastPacket && !isDead && (
+              <g transform={`translate(0, ${-NR - 14})`}>
+                <rect x="-30" y="-9" width="60" height="14" rx="4" fill="#EFF6FF" stroke="#93C5FD" strokeWidth="1" />
+                <text y="2" fill="#1D4ED8" fontSize="8" textAnchor="middle" fontWeight="700" fontFamily="JetBrains Mono">
+                   {node.lastPacket}
+                </text>
+              </g>
             )}
             
             {glow === 'var(--blue)' && (
